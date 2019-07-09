@@ -43,13 +43,14 @@ class TupleParallel(nn.DataParallel):
         """
 
         self.timer.start('total')
+        assert len(input_tuple) == len(self.device_ids)
 
         if self.parallel_transfer:
             # transfer to gpu nonblocking
-            for input,dev in zip(input_tuple,self.device_ids):
-                self.timer.start(f'nonblocking transfer {dev}')
-                input.to(dev,non_blocking=True)
-                self.timer.stop(f'nonblocking transfer {dev}')
+            for i in range(len(input_tuple)):
+                self.timer.start(f'nonblocking transfer {self.device_ids[i]}')
+                input_tuple[i] = input_tuple[i].to(self.device_ids[i],non_blocking=True)
+                self.timer.stop(f'nonblocking transfer {self.device_ids[i]}')
         else:
             assert all([input.device.index==d for input,d in zip(input_tuple,self.device_ids)]), "`devices` does not match with the devices that the actual inputs are on. Use TupleParallel(parallel_transfer=True) to do this transfer for you"
 
