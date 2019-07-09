@@ -14,8 +14,12 @@ class TupleParallel(nn.DataParallel):
         super().__init__(*args,**kwargs)
         self.parallel_transfer = parallel_transfer
         self.custom_parallel_apply = custom_parallel_apply
-        global timers
-        timers = [Timer() for _ in range(len(self.device_ids))] # one per gpu
+
+        # Timers for analysis
+        self._first = True
+        self.timer = Timer() # TupleParallel timer
+        self.partime = Timer() # parallel_apply timer
+        self.thread_timers = [Timer() for _ in range(len(self.device_ids))] # one per gpu
     def forward(self,input_tuple,**kwargs_shared):
         """
         IMPORTANT:
@@ -23,6 +27,10 @@ class TupleParallel(nn.DataParallel):
             -whatever kwargs you pass into this function will be SHARED by each device
             -Note on minibatch sizes: use a batch of size batch_size/num_gpus if you want results equivalent to running a batch on a single gpu of size batch_size).
             -Returns results in tuple form just like input. The results will be on their respective devices.
+
+        Conveniences:
+            -Attribute references will be forwarded to the wrapped module so you can do tuplemodule.x and it will forward it to whatever module tuplemodule is wrapped around.
+            -timers are built in. print(tuple_parallel.
 
         Implementation:
             -Transfer data to proper devices
@@ -34,14 +42,14 @@ class TupleParallel(nn.DataParallel):
         Timing notes: 1% spent on each transfer, 9% spent on replicate, 89% spent on parallel_apply. Depends on model size and computation complexity of course.
         """
 
-        timer.start('total')
+        self.timer.start('total')
 
         if self.parallel_transfer:
             # transfer to gpu nonblocking
             for input,dev in zip(input_tuple,self.device_ids):
-                timer.start(f'nonblocking transfer {dev}')
+                self.timer.start(f'nonblocking transfer {dev}')
                 input.to(dev,non_blocking=True)
-                timer.stop(f'nonblocking transfer {dev}')
+                self.timer.stop(f'nonblocking transfer {dev}')
         else:
             assert all([input.device.index==d for input,d in zip(input_tuple,self.device_ids)]), "`devices` does not match with the devices that the actual inputs are on. Use TupleParallel(parallel_transfer=True) to do this transfer for you"
 
@@ -49,30 +57,27 @@ class TupleParallel(nn.DataParallel):
         if len(self.device_ids) == 1:
             return [self.module(input_tuple[0], **kwargs_shared)]
 
-        timer.start('replicate')
+        self.timer.start('replicate')
         replicas = self.replicate(self.module, self.device_ids)
-        timer.stop()
+        self.timer.stop()
 
-        timer.start('par_apply')
+        self.timer.start('par_apply')
         if self.custom_parallel_apply:
             outputs = self.parallel_apply_timed(replicas, input_tuple, kwargs_shared)
         else:
             outputs = self.parallel_apply(replicas, input_tuple, [kwargs_shared for _ in input_tuple])
-        timer.stop('par_apply')
-        timer.stop('total')
+        self.timer.stop('par_apply')
+        self.timer.stop('total')
 
-        global first
-        if first:
-            timer.clear()
-            partime.clear()
-            [t.clear() for t in timers]
-            first = False
+        if self._first:
+            self.timer.clear()
+            self.partime.clear()
+            [t.clear() for t in self.thread_timers]
+            self._first = False
 
         #breaker('par')
-
         return outputs
 
-        #return self.gather(outputs, self.output_device)
     def __getattr__(self, key):
         """
         Forward attribute requests to inner module
@@ -84,51 +89,53 @@ class TupleParallel(nn.DataParallel):
         return getattr(self.module, key)
     def parallel_apply_timed(self,modules, inputs, kwargs_shared={}):
         """
+        This is a slightly modified version of DataParallel.parallel_apply. Using the original works as well and you should try it if you have issue with this.
+
         Timing notes: ~100% of time should be spent in the module() call for each thread. Additionally ~7% of total time will be spent on launching threads.
         """
-        partime.start('total')
+        self.partime.start('total')
         assert len(modules) == len(inputs) == len(self.device_ids), ""
         assert isinstance(kwargs_shared,dict)
         results = [None]*len(self.device_ids)
         grad_enabled = torch.is_grad_enabled()
 
         def _worker(i, module, input, device):
-            timers[i].start(f'total')
+            self.thread_timers[i].start(f'total')
             torch.set_grad_enabled(grad_enabled)
             try:
                 #t.start(f'{i}.to')
                 #input = input.to(device) ## ADDED
                 #t.stop(f'{i}.to')
                 with torch.cuda.device(device): # negligible
-                    timers[i].start(f'module()')
+                    self.thread_timers[i].start(f'module()')
                     output = module(input, **kwargs_shared) # 94%
-                    timers[i].stop(f'module()')
+                    self.thread_timers[i].stop(f'module()')
                 #with lock:
                 #    results[i] = output
                 results[i] = output
             except Exception as e:
                 #with lock:
                 results[i] = e
-            timers[i].stop(f'total')
+            self.thread_timers[i].stop(f'total')
 
-        partime.start('threads') # 100%
+        self.partime.start('threads') # 100%
         if len(modules) > 1:
             threads = [threading.Thread(target=_worker,
                                         args=(i, module, input, device))
                        for i, (module, input, device) in
                        enumerate(zip(modules, inputs, self.device_ids))]
 
-            partime.start(f'launch_join')
+            self.partime.start(f'launch_join')
             for i,thread in enumerate(threads):
-                timers[i].start(f'launch_time') # abt 7-16% of the time spent inside is spent on this start() call
+                self.thread_timers[i].start(f'launch_time') # abt 7-16% of the time spent inside is spent on this start() call
                 thread.start()
-                timers[i].stop(f'launch_time')
+                self.thread_timers[i].stop(f'launch_time')
             for i,thread in enumerate(threads):
                 thread.join()
-            partime.stop(f'launch_join')
+            self.partime.stop(f'launch_join')
         else:
             _worker(0, modules[0], inputs[0], devices[0])
-        partime.stop('threads')
+        self.partime.stop('threads')
 
         outputs = []
         for i in range(len(inputs)):
@@ -136,7 +143,7 @@ class TupleParallel(nn.DataParallel):
             if isinstance(output, Exception):
                 raise output
             outputs.append(output)
-        partime.stop('total')
+        self.partime.stop('total')
         return outputs
 
 
@@ -210,9 +217,4 @@ class Timer:
             body.append(repr(timer))
         return 'Timers:\n'+',\n'.join(body)
 
-# Timers for analysis
-first = True
-timer = Timer() # TupleParallel timer
-partime = Timer() # parallel_apply timer
-timers = None # thread timers (one per gpu). Initialized in __init__
 
