@@ -45,11 +45,12 @@ class TupleParallel(nn.DataParallel):
         self.timer.start('total')
         assert len(input_tuple) == len(self.device_ids)
 
+
         if self.parallel_transfer:
             # transfer to gpu nonblocking
             for i in range(len(input_tuple)):
                 self.timer.start(f'nonblocking transfer {self.device_ids[i]}')
-                input_tuple[i] = input_tuple[i].to(self.device_ids[i],non_blocking=True)
+                input_tuple[i] = to_gpu(input_tuple[i],self.device_ids[i])
                 self.timer.stop(f'nonblocking transfer {self.device_ids[i]}')
         else:
             assert all([input.device.index==d for input,d in zip(input_tuple,self.device_ids)]), "`devices` does not match with the devices that the actual inputs are on. Use TupleParallel(parallel_transfer=True) to do this transfer for you"
@@ -135,7 +136,7 @@ class TupleParallel(nn.DataParallel):
                 thread.join()
             self.partime.stop(f'launch_join')
         else:
-            _worker(0, modules[0], inputs[0], devices[0])
+            _worker(0, modules[0], inputs[0], self.device_ids[0])
         self.partime.stop('threads')
 
         outputs = []
@@ -148,6 +149,17 @@ class TupleParallel(nn.DataParallel):
         return outputs
 
 
+def to_gpu(val,dev):
+    """
+    Calls val.to(dev,non_blocking=True) but recurses on lists/tuples
+    """
+    if type(val) == list:
+        return [to_gpu(item,dev) for item in val]
+    if type(val) == tuple:
+        return tuple([to_gpu(item,dev) for item in val])
+    if not hasattr(val,'to'):
+        raise ValueError("You must implement a .to(*args,**kwargs) function for your type")
+    return val.to(dev,non_blocking=True)
 
 
 # helper class for timing things.
