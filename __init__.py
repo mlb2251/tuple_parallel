@@ -50,7 +50,8 @@ class TupleParallel(nn.DataParallel):
             # transfer to gpu nonblocking
             for i in range(len(input_tuple)):
                 self.timer.start(f'nonblocking transfer {self.device_ids[i]}')
-                input_tuple[i] = to_gpu(input_tuple[i],self.device_ids[i])
+                with torch.cuda.device(self.device_ids[i]):
+                    input_tuple[i] = to_gpu(input_tuple[i],self.device_ids[i])
                 self.timer.stop(f'nonblocking transfer {self.device_ids[i]}')
         else:
             assert all([input.device.index==d for input,d in zip(input_tuple,self.device_ids)]), "`devices` does not match with the devices that the actual inputs are on. Use TupleParallel(parallel_transfer=True) to do this transfer for you"
@@ -157,9 +158,17 @@ def to_gpu(val,dev):
         return [to_gpu(item,dev) for item in val]
     if type(val) == tuple:
         return tuple([to_gpu(item,dev) for item in val])
-    if not hasattr(val,'to'):
-        raise ValueError("You must implement a .to(*args,**kwargs) function for your type")
-    return val.to(dev,non_blocking=True)
+    if hasattr(val,'cuda'):
+        try:
+            return val.cuda(non_blocking=True)
+        except TypeError:
+            raise TypeError(".cuda() implementation must allow the call .cuda(non_blocking=True)")
+    if hasattr(val,'to'):
+        try:
+            return val.to(dev,non_blocking=True)
+        except TypeError:
+            raise TypeError(".to() implementation must allow the call .to(device,non_blocking=True)")
+    raise TypeError("You must implement a .to(device, non_blocking=False) or .cuda() function for your type")
 
 
 # helper class for timing things.
