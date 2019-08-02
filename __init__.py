@@ -40,6 +40,8 @@ class TupleParallel(nn.DataParallel):
         Timing notes: 1% spent on each transfer, 9% spent on replicate, 89% spent
             on parallel_apply. Depends on model size and computation complexity of course.
         """
+        assert isinstance(input_tuple,(list,tuple))
+        input_tuple = list(input_tuple) # lolol
 
         # TODO should i make sure the model is on self.device_ids[0]? Should i move it there automatically?
 
