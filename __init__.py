@@ -53,10 +53,7 @@ class TupleParallel(nn.DataParallel):
                     input_tuple[i] = to_gpu(input_tuple[i],self.device_ids[i])
         else:
             if not all([input.device.index==d for input,d in zip(input_tuple,self.device_ids)]):
-                raise ValueError(f"At least one input is not on the correct device. \
-                        Improper inputs at tuple indices: \
-                        {[i for i,(input,d) in enumerate(zip(input_tuple,self.device_ids)) \
-                        if input.device.index != d]}")
+                raise ValueError(f"At least one input is not on the correct device. Improper inputs at tuple indices: {[i for i,(input,d) in enumerate(zip(input_tuple,self.device_ids)) if input.device.index != d]}")
 
         # single GPU case
         if len(self.device_ids) == 1:
