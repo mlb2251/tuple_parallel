@@ -3,11 +3,11 @@
 ### `tuple_parallel.TupleParallel`:
     test
 
-### `tuple_parallel.recursive_cuda(val,device=None,**kwargs)`:
+#### `tuple_parallel.recursive_cuda(val,device=None,**kwargs)`:
     returns val.cuda(device,**kwargs), recursing on lists, tuples, and dicts. If val doesn't have a .cuda implementation then .to is used, and if .to isn't implemented then the value is returned as is.
     If no device is provided the torch.cuda.current_device() is used.
 
-### `tuple_paralle.tp_collate(ndevices)`:
+##### `tuple_paralle.tp_collate(ndevices)`:
     This is a decorator taking an int `ndevices`.
     If `collate_fn` worked with some model Model(), then tp_collate(ndevices)(collate_fn) works with TupleParallel(Model()). It's basically an easy way to make your collate function work with TupleParallel without any extra work.
     See also tuple_parallel.default_collate
