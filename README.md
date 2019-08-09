@@ -1,6 +1,6 @@
 # TupleParallel
 
-###`tuple_parallel.TupleParallel`:
+### `tuple_parallel.TupleParallel`:
     test
 
 ###`tuple_parallel.recursive_cuda(val,device=None,**kwargs)`:
