@@ -2,7 +2,7 @@
 
 tuple_parallel.TupleParallel:
 
-tuple_parallel.recursive_cuda(val,device=None,**kwargs)
+###tuple_parallel.recursive_cuda(val,device=None,**kwargs)
     returns val.cuda(device,**kwargs), recursing on lists, tuples, and dicts. If val doesn't have a .cuda implementation then .to is used, and if .to isn't implemented then the value is returned as is.
     If no device is provided the torch.cuda.current_device() is used.
 
