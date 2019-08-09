@@ -7,17 +7,17 @@
     returns val.cuda(device,**kwargs), recursing on lists, tuples, and dicts. If val doesn't have a .cuda implementation then .to is used, and if .to isn't implemented then the value is returned as is.
     If no device is provided the torch.cuda.current_device() is used.
 
-###tuple_paralle.tp_collate(ndevices):
+###`tuple_paralle.tp_collate(ndevices)`:
     This is a decorator taking an int `ndevices`.
     If `collate_fn` worked with some model Model(), then tp_collate(ndevices)(collate_fn) works with TupleParallel(Model()). It's basically an easy way to make your collate function work with TupleParallel without any extra work.
     See also tuple_parallel.default_collate
 
-####tuple_parallel.default_collate(ndevices):
+####`tuple_parallel.default_collate(ndevices)`:
     This returns tp_collate(ndevices)(torch.utils.data.dataloader.default_collate)
     So basically it's just tp_collate applied to the default collate function
     If the module you're wrapping in TupleParallel didn't need a special collate function, then you want to do DataLoader(collate_fn=tuple_parallel.default_collate). This is an important step!
 
-#####tuple_parallel.tuple_fn(fn):
+#####`tuple_parallel.tuple_fn(fn)`:
     This is a decorator that takes a function of arbitrary args/kwargs and returns a function that takes the same arguments in tuple form. Basically it's what TupleParallel does for the forward() function, but for any function. So if youd normally do a,b = foo(x,y) you'd do (a1,a1),(b1,b2) = foo((x1,x2),(y1,y2)).
     Note that this does NOT run the inputs in parallel. That extension could be easily added as an option.
 
