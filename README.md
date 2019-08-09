@@ -3,7 +3,7 @@
 ###`tuple_parallel.TupleParallel`:
     test
 
-###`tuple_parallel.recursive_cuda(val,device=None,**kwargs)`
+###`tuple_parallel.recursive_cuda(val,device=None,**kwargs)`:
     returns val.cuda(device,**kwargs), recursing on lists, tuples, and dicts. If val doesn't have a .cuda implementation then .to is used, and if .to isn't implemented then the value is returned as is.
     If no device is provided the torch.cuda.current_device() is used.
 
@@ -21,18 +21,18 @@
     This is a decorator that takes a function of arbitrary args/kwargs and returns a function that takes the same arguments in tuple form. Basically it's what TupleParallel does for the forward() function, but for any function. So if youd normally do a,b = foo(x,y) you'd do (a1,a1),(b1,b2) = foo((x1,x2),(y1,y2)).
     Note that this does NOT run the inputs in parallel. That extension could be easily added as an option.
 
-tuple_parallel.cuda_attrs(obj,*args,**kwargs):
+`tuple_parallel.cuda_attrs(obj,*args,**kwargs)`:
     Calls recursive_cuda() on every attr in obj and returns obj. This is a nice generic implementation for .cuda in most custom classes you might write.
 
-tuple_parallel.Batch:
+`tuple_parallel.Batch`:
     This is a class that implements .cuda() to simply call tuple_parallel.cuda_fields. Meant to be subclassed though you can also just use tuple.paralle.cuda_fields yourself for the same result.
 
-tuple_parallel.Tuplewise:
+`tuple_parallel.Tuplewise`:
     This is a class that's initialized with a list/tuple. Once initialized, any getattribute or getitem calls will be applied to each item in the underlying tuple.
     For example: Tuplewise([(0,1),(2,3),(4,5)])[0] == [0,2,4]
     So effectively it's just sugar on list comprehension
 
-tuple_parallel.cat:
+`tuple_parallel.cat`:
     A common case used like: TupleParallel(transfer_output=True, reduction=tuple_parallel.cat)
     This takes a tuple of return values and calls torch.cat() on each return value if the return value is a tuple of tensors. Note it's assumed that all return values are themselves tensors
 
