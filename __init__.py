@@ -58,6 +58,11 @@ class TupleParallel(nn.DataParallel):
             if len(arg) != ndevices:
                 raise ValueError(f"Expected input of length {ndevices} and got {len(arg)}")
 
+        # convert to lists for mutability
+        args = [list(arg) for arg in args]
+        kwargs = {k:list(v) for k,v in kwargs.items()}
+
+
         # transfer to gpu if requested (default yes)
         # args example: for model(x,y) it might be like ((xs,xs,xs),(ys,ys,ys))
         # so we step thru and send the first xs and first ys to the first device, etc
@@ -71,6 +76,8 @@ class TupleParallel(nn.DataParallel):
 
         # go from ((xs,xs,xs),(ys,ys,ys)) back to ((xs,ys),(xs,ys),(xs,ys)) ie one arg list per gpu
         args_tup = list(zip(*args))
+        if args_tup == []: # TODO this is a quick fix. Unclear if similar issue for kwargs by the way. Worth seeing why this happens, unclear.
+            args_tup = [[]]*ndevices
         # go from dict of k:(v1,v2,v3) to tuple of dicts [{k:v1}, {k:v2}, {k:v3}]
         kwargs_tup = [{k:v[i] for k,v in kwargs.items()} for i in range(ndevices)]
 
@@ -142,6 +149,8 @@ def recursive_cuda(val,device=None,**kwargs):
         result = val.cuda(device,**kwargs)
     elif hasattr(val,'to'):
         result = val.to(device,**kwargs)
+    else:
+        return val
     assert result is not None, "Your .to() or .cuda() implementation should return `self` at the end."
     return result
 
