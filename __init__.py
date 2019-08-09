@@ -166,19 +166,6 @@ class Batch:
     def cuda(self,*args,**kwargs):
         return cuda_attrs(self,*args,**kwargs)
 
-
-#def class_recursive_cuda(val,device=None,deep=False,**kwargs):
-#    """
-#    Like recursive_cuda but recurses into all fields of classes if the overall class didn't have a .cuda or .to method
-#    If deep is True then this will recurse into classes within fields!
-#    """
-#    if isinstance(val,(list,tuple)):
-#        return recui
-#        for k,v in vars(self).items():
-#            setattr(self,k,recursive_cuda(v,device,**kwargs)
-#        return self
-
-
 # a decorator that takes an argument
 def tp_collate(ndevices):
     """
@@ -257,22 +244,6 @@ def tuple_fn(fn):
 
         return [list(x) for x in list(zip(*results))]
     return wrapper
-#
-#def varwise_to_gpuwise(*,args=None,kwargs=None):
-#
-#def gpuwise_to_varwise(*,tuple=None,dict=None):
-#    res = []
-#    if tuple is not None:
-#        # go from ((xs,xs,xs),(ys,ys,ys)) back to ((xs,ys),(xs,ys),(xs,ys)) ie one arg list per gpu
-#        res.append(list(zip(*tuple)))
-#    if dict is not None:
-#        # go from dict of k:(v1,v2,v3) to tuple of dicts [{k:v1}, {k:v2}, {k:v3}]
-#        res.append([{k:v[i] for k,v in dict.items()} for i in range(len(dict.values()[0]))])
-#    if len(res) == 2:
-#        return res
-#    return res[0]
-#
-#    kwargs = {k:[cres[k] for cres in collate_results] for k in collate_results[0]}
 
 class Tuplewise:
     def __init__(self,tup):
