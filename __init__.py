@@ -3,37 +3,54 @@ import numpy as np
 from torch import nn
 import itertools
 
-#model = Model()
-#model = TupleParallel(model)
-#model(data)
+def cat(returns):
+    """
+    return cat([x,y,z]) where x,y,z are each tuples of tensors will yield x,y,z where each is a tensor that results from cating
+    """
+    if not isinstance(returns[0],(list,tuple)):
+        # e.g. if the function just returned a single value then returns is a tuple of that value
+        return torch.cat(returns)
+
+    result = []
+    for ret in returns:
+        if len(ret) > 0 and isinstance(ret[0],torch.Tensor):
+            result.append(torch.cat(ret))
+        else:
+            result.append(ret)
+    if len(result) == 1:
+        result = result[0]
+    return result
 
 class TupleParallel(nn.DataParallel):
-    def __init__(self,*args,transfer_data=True,**kwargs):
+    def __init__(self,module,device_ids,transfer_output=True,transfer_input=True,reduction=cat):
         """
-        transfer_data: Use this if your data is not on the correct devices already.
-            Does a nonblocking (if pinned memory) transfer of data to each gpu (small speedup).
+        `device_ids`: List of device ids (ints) for gpus to use. The length of this is the number of gpus that we parallelize over.
+        `transfer_output`: If True, all outputs will be sent to the home_device (device_ids[0]) at the end.
+        `reduction`: a callable, and if provided this will be called on the output of TupleParallel's forward right before returning.
+            tuple_parallel.cat is the default. None means no reduction.
+        `transfer_input`: Use this if your data is not on the correct devices already. Transfers data to proper gpus at start of forward().
+        TupleParallel will automatically move `module` to the home device, which is device_ids[0]
         """
-        super().__init__(*args,**kwargs)
-        self.transfer_data = transfer_data
+        nn.Module.__init__(self) # don't do DataParallel's __init__, we only subclass it to steal its functions
+        assert all([isinstance(dev,int) for dev in device_ids])
+        self.module = module
+        self.device_ids = device_ids
+        self.ndevices = len(device_ids)
+        self.home_device = device_ids[0]
+        self.transfer_output = transfer_output
+        self.transfer_input = transfer_input
+        self.reduction = reduction if (reduction is not None) else (lambda x:x)
+
+        #torch.nn.parallel.data_parallel._check_balance(self.device_ids)
+        self.module = self.module.cuda(self.home_device)
+
+
     def forward(self,*args,**kwargs):
         """
-        IMPORTANT:
-            -`input_tuple` must be a tuple of length equal to the number of
-                GPUS TupleParallel was initialized with. Each element of
-                the tuple should be a minibatch that would normally be sent
-                as input to whatever module TupleParallel is wrapping.
-            -whatever kwargs you pass into this function will be SHARED by each device
-            -Note on minibatch sizes: use a batch of size batch_size/num_gpus if
-                you want results equivalent to running a batch on a single gpu of size
-                batch_size).
-            -Returns results in tuple form just like input. The results will be on
-                their respective devices.
-
         Conveniences:
             -Attribute references will be forwarded to the wrapped module so you can do
                 tuplemodule.x and it will forward it to whatever module tuplemodule is
                 wrapped around.
-            -timers are built in. print(tuple_parallel.
 
         Implementation:
             -Transfer data to proper devices
@@ -47,26 +64,21 @@ class TupleParallel(nn.DataParallel):
             on parallel_apply. Depends on model size and computation complexity of course.
         """
 
-        # TODO should i make sure the model is on self.device_ids[0]? Should i move it there automatically?
-
-        ndevices = len(self.device_ids)
-
         # make sure args is a list of N-tuples and kwargs is a dict with N-tuples where N == ndevices
         for arg in itertools.chain(args,kwargs.values()):
             if not isinstance(arg,(list,tuple)):
                 raise ValueError(f"Expected each argument to be a list or tuple not a {arg.__class__}")
-            if len(arg) != ndevices:
-                raise ValueError(f"Expected input of length {ndevices} and got {len(arg)}")
+            if len(arg) != self.ndevices:
+                raise ValueError(f"Expected input of length {self.ndevices} and got {len(arg)}")
 
         # convert to lists for mutability
         args = [list(arg) for arg in args]
         kwargs = {k:list(v) for k,v in kwargs.items()}
 
-
         # transfer to gpu if requested (default yes)
         # args example: for model(x,y) it might be like ((xs,xs,xs),(ys,ys,ys))
         # so we step thru and send the first xs and first ys to the first device, etc
-        if self.transfer_data:
+        if self.transfer_input:
             for i,device in enumerate(self.device_ids):
                 with torch.cuda.device(device):
                     for arg in args:
@@ -76,15 +88,18 @@ class TupleParallel(nn.DataParallel):
 
         # go from ((xs,xs,xs),(ys,ys,ys)) back to ((xs,ys),(xs,ys),(xs,ys)) ie one arg list per gpu
         args_tup = list(zip(*args))
-        if args_tup == []: # TODO this is a quick fix. Unclear if similar issue for kwargs by the way. Worth seeing why this happens, unclear.
-            args_tup = [[]]*ndevices
+
         # go from dict of k:(v1,v2,v3) to tuple of dicts [{k:v1}, {k:v2}, {k:v3}]
-        kwargs_tup = [{k:v[i] for k,v in kwargs.items()} for i in range(ndevices)]
+        kwargs_tup = [{k:v[i] for k,v in kwargs.items()} for i in range(self.ndevices)]
+
+        if args_tup == []: # TODO this is a quick fix. Unclear if similar issue for kwargs by the way. Worth seeing why this happens, unclear. Also maybe this isn't a real problem idk it came up once though in a case with no args as input only kwargs
+            args_tup = [[]]*self.ndevices
+
+        assert len(args_tup) == len(kwargs_tup)
 
         # single GPU case
-        if ndevices == 1:
-            assert len(args_tup) == len(kwargs_tup) == 1
-            return list(zip(*[self.module(*args_tup[0], **kwargs_tup[0])]))
+        if self.ndevices == 1:
+            return self.reduction(list(zip(*[self.module(*args_tup[0], **kwargs_tup[0])])))
 
         # copy the network to each gpu
         replicas = self.replicate(self.module, self.device_ids)
@@ -92,14 +107,18 @@ class TupleParallel(nn.DataParallel):
         # run the network on each gpu in parallel
         outputs = self.parallel_apply(replicas, args_tup, kwargs_tup)
 
+        if self.transfer_output is True:
+            with torch.cuda.device(self.home_device):
+                outputs = recursive_cuda(outputs)
+
         if not isinstance(outputs[0],(list,tuple)):
             # if forward() only returns a single thing not a tuple then just return the list of that value
-            return outputs
+            return self.reduction(outputs)
 
         # go from ((xs,ys),(xs,ys),(xs,ys)) back to ((xs,xs,xs),(ys,ys,ys)) 
         # but we dont do this if outputs = (1,2,3) for example, we only do it when the output is a tuple/list
         outputs = [list(x) for x in list(zip(*outputs))]
-        return outputs
+        return self.reduction(outputs)
 
     def __getattr__(self, key):
         """
@@ -110,27 +129,6 @@ class TupleParallel(nn.DataParallel):
         except AttributeError:
             pass # pass so that error messages become more readable if the second getattr fails
         return getattr(self.module, key)
-
-#def to_gpu(val,dev,non_blocking=True):
-#    """
-#    Calls val.cuda(non_blocking=True) or val.to(dev,non_blocking=True) and
-#        recurses on lists/tuples
-#    """
-#    if type(val) == list:
-#        return [to_gpu(item,dev,non_blocking=non_blocking) for item in val]
-#    if type(val) == tuple:
-#        return tuple([to_gpu(item,dev,non_blocking=non_blocking) for item in val])
-#    if hasattr(val,'cuda'):
-#        try:
-#            return val.cuda(non_blocking=non_blocking)
-#        except TypeError:
-#            raise TypeError(f"{val.__class__} .cuda() implementation must allow the call .cuda(non_blocking=True)")
-#    if hasattr(val,'to'):
-#        try:
-#            return val.to(dev,non_blocking=non_blocking)
-#        except TypeError:
-#            raise TypeError(f"{val.__class__} .to() implementation must allow the call .to(device,non_blocking=True)")
-#    raise TypeError(f"Type {val.__class__} must implement a .to(device, non_blocking=False) or .cuda() function for your type")
 
 def recursive_cuda(val,device=None,**kwargs):
     """
@@ -145,6 +143,8 @@ def recursive_cuda(val,device=None,**kwargs):
         return [recursive_cuda(item,device,**kwargs) for item in val]
     elif type(val) == tuple:
         return tuple([recursive_cuda(item,device,**kwargs) for item in val])
+    elif type(val) == dict:
+        return {k:recursive_cuda(item,device,**kwargs) for k,item in val.items()}
     elif hasattr(val,'cuda'):
         result = val.cuda(device,**kwargs)
     elif hasattr(val,'to'):
@@ -153,6 +153,19 @@ def recursive_cuda(val,device=None,**kwargs):
         return val
     assert result is not None, "Your .to() or .cuda() implementation should return `self` at the end."
     return result
+
+def cuda_attrs(obj,*args,**kwargs):
+    for k,v in vars(obj).items():
+        setattr(obj,k,recursive_cuda(v,*args,**kwargs))
+    return obj
+
+class Batch:
+    """
+    Just a helpful class you can subclass that will make each attr you assign get .cuda()'d automatically
+    """
+    def cuda(self,*args,**kwargs):
+        return cuda_attrs(self,*args,**kwargs)
+
 
 #def class_recursive_cuda(val,device=None,deep=False,**kwargs):
 #    """
@@ -214,14 +227,6 @@ def tp_collate(ndevices):
         return wrapper
     return decorator
 
-class Batch:
-    """
-    Just a helpful class you can subclass that will make each attr you assign get .cuda()'d automatically
-    """
-    def cuda(self,device=None,**kwargs):
-        for k,v in vars(self).items():
-            setattr(self,k,recursive_cuda(v,device,**kwargs))
-        return self
 
 def tuple_fn(fn):
     """
@@ -269,11 +274,6 @@ def tuple_fn(fn):
 #
 #    kwargs = {k:[cres[k] for cres in collate_results] for k in collate_results[0]}
 
-# a version of default_collate that works with ndevices
-def default_collate(ndevices):
-    assert isinstance(ndevices,int)
-    return tp_collate(ndevices)(torch.utils.data.dataloader.default_collate)
-
 class Tuplewise:
     def __init__(self,tup):
         assert isinstance(tup,(list,tuple))
@@ -288,4 +288,9 @@ class Tuplewise:
 
 def tuplewise(tup):
     return Tuplewise(tup)
+
+# a version of default_collate that works with ndevices
+def default_collate(ndevices):
+    assert isinstance(ndevices,int)
+    return tp_collate(ndevices)(torch.utils.data.dataloader.default_collate)
 
