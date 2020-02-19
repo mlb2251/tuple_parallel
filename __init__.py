@@ -5,9 +5,10 @@ import itertools
 
 def cat(returns):
     """
-    return cat([x,y,z]) where x,y,z are each tuples of tensors will yield x,y,z where each is a tensor that results from cating
+    cat([x,y,z]) where x,y,z are each tuples of tensors will yield x,y,z where each is a tensor that results from cating
+    so if forward() returns two values a,b then the tupleparallel version would return ((a1,a2),(b1,b2)) and cat() of this result would yield (a,b). Note reduction=cat is the default for tupleparallel so this would be done automatically.
     """
-    if not isinstance(returns[0],(list,tuple)):
+    if not isinstance(returns[0],(list,tuple)): # TODO should be torch.is_tensor() instead probably
         # e.g. if the function just returned a single value then returns is a tuple of that value
         return torch.cat(returns)
 
@@ -20,6 +21,20 @@ def cat(returns):
     if len(result) == 1:
         result = result[0]
     return result
+
+def dict_merge(dicts):
+    assert isinstance(dicts[0],dict)
+    # TODO assert all have same keys
+    out = {}
+    for k,v in dicts[0].items():
+        if torch.is_tensor(v) and v.dim() > 0:
+            out[k] = torch.cat([d[k] for d in dicts],dim=0)
+        elif torch.is_tensor(v) and v.dim() == 0:
+            out[k] = torch.stack([d[k] for d in dicts])
+        else:
+            out[k] = [d[k] for d in dicts]
+    return out
+
 
 class TupleParallel(nn.DataParallel):
     def __init__(self,module,device_ids,transfer_output=True,transfer_input=True,reduction=cat):
@@ -69,13 +84,13 @@ class TupleParallel(nn.DataParallel):
             if not isinstance(arg,(list,tuple)):
                 raise ValueError(f"Expected each argument to be a list or tuple not a {arg.__class__}")
             if len(arg) != self.ndevices:
-                raise ValueError(f"Expected input of length {self.ndevices} and got {len(arg)}")
+                raise ValueError(f"Expected input tuple of length {self.ndevices} and got {len(arg)}")
 
-        # convert to lists for mutability
+        # convert from tuples to to lists for mutability
         args = [list(arg) for arg in args]
         kwargs = {k:list(v) for k,v in kwargs.items()}
 
-        # transfer to gpu if requested (default yes)
+        # transfer to gpu if requested (default: yes)
         # args example: for model(x,y) it might be like ((xs,xs,xs),(ys,ys,ys))
         # so we step thru and send the first xs and first ys to the first device, etc
         if self.transfer_input:
@@ -111,7 +126,7 @@ class TupleParallel(nn.DataParallel):
             with torch.cuda.device(self.home_device):
                 outputs = recursive_cuda(outputs)
 
-        if not isinstance(outputs[0],(list,tuple)):
+        if not isinstance(outputs[0],(list,tuple)): # TODO shd this be just tuple and not list
             # if forward() only returns a single thing not a tuple then just return the list of that value
             return self.reduction(outputs)
 
@@ -197,10 +212,12 @@ def tp_collate(ndevices):
             sublists = [sublist.tolist() for sublist in np.array_split(as_ndarray,ndevices)]
             # call collate_fn on each sublist
             collate_results = [collate_fn(sublist) for sublist in sublists]
-            if isinstance(collate_results[0],dict):
+
+            # a convenience: if your collate_fn returned a dict of values then now it still returns a dict but with a tuple of values for each key. Useful for making existing code work with minimal modification I think
+            ##if isinstance(collate_results[0],dict):
                 # go from [{k:v1}, {k:v2}, {k:v3}] to {k:(v1,v2,v3)}
                 #assert all([all([key in c_res for c_res in collate_results]) for key in set(sum([list(c_res.keys()) for c_res in collate_results]))])
-                return {k:[cres[k] for cres in collate_results] for k in collate_results[0]}
+            ##    return {k:[cres[k] for cres in collate_results] for k in collate_results[0]}
 
             if not isinstance(collate_results[0],(list,tuple)):
                 # if getitem just returns a single thing `x` then we will returns (xs,xs) for a 2-gpu output rather than something like ((xs,xs),(ys,ys)) notice the latter has an outer tuple layer. This gets destructured during `for x,y in loader` whereas it is not wanted in `for x in loader` since if it was like [(xs,xs)] it would need to be written as `for (x,) in loader`.

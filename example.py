@@ -4,7 +4,7 @@ This is a modification of a DataParallel Tutorial to use TupleParallel instead
 
 
 # change to whatever devices you want to use
-DEVICES = [1,2]
+DEVICES = [0,2,3]
 
 
 
@@ -91,8 +91,8 @@ class Model(nn.Module):
 
     def forward(self, input):
         output = self.fc(input)
-        print("\tIn Model: input size", input.size(),
-              "output size", output.size())
+        print("\tIn Model: input size", tuple(input.size()),
+              "output size", tuple(output.size()))
 
         return output
 
@@ -125,11 +125,11 @@ model.to(DEVICES[0]) # we put our model on the first device
 
 
 for data in rand_loader:
-    #input = data.to(device)
     #input = data.cuda() # We do NOT need to throw the data on the GPU
-    print("(outside) Input",[d.shape for d in data])
+    # `data` is a 3-tuple in a 3 GPU example
+    print("Input",[tuple(d.shape) for d in data])
     output = model(data)
-    print("(outside) Output",[o.shape for o in output])
+    print("Output",output.shape)
 
 
 ######################################################################
